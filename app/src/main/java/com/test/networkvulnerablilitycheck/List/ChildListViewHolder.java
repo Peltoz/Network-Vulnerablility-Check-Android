@@ -7,4 +7,5 @@ public class ChildListViewHolder {
     public ImageView mChildListViewIcon;
     // String mText01을 받을 TextView
     public TextView mChildListViewText;
+
 }

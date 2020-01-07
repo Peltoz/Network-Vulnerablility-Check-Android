@@ -1,25 +1,29 @@
 package com.test.networkvulnerablilitycheck;
 
+import android.app.AlertDialog;
 import android.app.ProgressDialog;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.os.AsyncTask;
 import android.os.Bundle;
 import android.support.v7.app.AppCompatActivity;
+import android.text.method.PasswordTransformationMethod;
 import android.util.Log;
 import android.util.SparseBooleanArray;
+import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.Window;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.TextView;
 
-
-import com.test.networkvulnerablilitycheck.Util.IoTCheck;
-import com.test.networkvulnerablilitycheck.Util.Netinfo;
+import com.test.networkvulnerablilitycheck.Util.PwdCheck;
+import com.test.networkvulnerablilitycheck.Util.RouterCheck;
 
 import java.io.BufferedReader;
 import java.io.FileReader;
@@ -27,532 +31,394 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static android.content.ContentValues.TAG;
-import static java.lang.Thread.sleep;
+import static com.test.networkvulnerablilitycheck.MainActivity.logHistory;
 
 public class SearchDeviceActivity extends AppCompatActivity {
 
-    TextView tvWifiState;
-    TextView tvScanning;
-    ArrayList<InetAddress> inetAddresses;
-    ArrayList<String> items;
-    ListView tvResult;
-    ArrayAdapter adapter;
-    Boolean bType = true;
-    Intent intent;
-    String[] asIP;
-    String sIP;
-    ScanTask scanTaskA;
-    //ScanTask2 scanTaskB;
+  TextView tvScanning;
+  ArrayList<InetAddress> inetAddresses;
+  ArrayList<String> items;
+  ListView tvResult;
+  ArrayAdapter adapter;
+  Intent intent;
+  String[] asIP;
+  ArrayList<String> sIp = new ArrayList<String>();
+  int pList = 0;
+  public int end = 0;
+  public int size = 0;
+  public int start = 0;
+  public int i;
+  public static int j;
+  ArrayList<String> canonicalHostNames;
+  SearchIp searchIp;
+
+  @Override
+  protected void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    supportRequestWindowFeature(Window.FEATURE_NO_TITLE);
+
+    String net = RouterCheck.getIpAddress();
+    Log.i("테스트", "현재 연결된 ip주소 :" + net);
+    String[] a = net.split("\\.");
+    searchIp = new SearchIp(a[0] + "." + a[1] + "." + a[2] + ".", 1, 255);
+
+    intent = new Intent(this, ProgressActivity.class);
+
+    tvScanning = (TextView) findViewById(R.id.Scanning);
+
+    items = new ArrayList<String>();
+    adapter = new ArrayAdapter(this, android.R.layout.simple_list_item_multiple_choice, items);
+    if (inetAddresses == null) {
+      inetAddresses = new ArrayList<>();
+    }
+    inetAddresses.clear();
+
+    if (canonicalHostNames == null) {
+      canonicalHostNames = new ArrayList<>();
+    }
+    canonicalHostNames.clear();
+
+    searchIp.execute(); //실행 ㄱㄱ
+  }
 
 
-    protected long start = 0;
-    protected long end = 0;
-    protected long size = 0;
+  public class SearchIp extends AsyncTask<Void, Void, Void> {
 
-    private long network_ip = 0;
-    private long network_start = 0;
-    private long network_end = 0;
+    private final static int THREADS = 20; //뜨레드 부분
+    private ExecutorService executor;
+    protected String ip;
+    protected int start;
+    protected int end;
 
-    private ExecutorService mPool;
-    private int pt_move = 2;
+    public SearchIp(String ip, int start, int end) {
+      super();
+      this.ip = ip;
+      this.start = start;
+      this.end = end;
+      Log.i("테스트", "DefaultDiscovery onCreate 시작");
+    }
 
-    private final static String MAC_RE = "^%s\\s+0x1\\s+0x2\\s+([:0-9a-fA-F]+)\\s+\\*\\s+\\w+$";
-    private final static int BUF = 8 * 1024;
-
-    ArrayList<String> canonicalHostNames;
+    ProgressDialog asyncDialog = new ProgressDialog(SearchDeviceActivity.this);
 
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        supportRequestWindowFeature(Window.FEATURE_NO_TITLE);
+    protected void onPreExecute() {
 
-        intent = new Intent(this, ProgressActivity.class);
+      asyncDialog.setProgressStyle(ProgressDialog.STYLE_SPINNER);
+      asyncDialog.setMessage("디바이스 검색중..");
+      asyncDialog.setCanceledOnTouchOutside(false);
+      asyncDialog.setCancelable(true);
+      asyncDialog.setOnKeyListener(new DialogInterface.OnKeyListener() {
+        @Override
+        public boolean onKey(DialogInterface dialog, int keyCode, KeyEvent event) {
+          if (keyCode == KeyEvent.KEYCODE_BACK) {
+            searchIp.cancel(true);
+            finish();
+            dialog.dismiss();
+          }
+          return false;
+        }
+      });
 
-        scanTaskA = new ScanTask(tvScanning, tvResult);
-        //scanTaskB = new ScanTask2(tvScanning, tvResult);
+      asyncDialog.setOnDismissListener(new DialogInterface.OnDismissListener() {
+        @Override
+        public void onDismiss(DialogInterface dialog) {
+          searchIp.cancel(true);
+        }
+      });
 
-        tvScanning = (TextView)findViewById(R.id.Scanning);
+      // show dialog
+      asyncDialog.show();
 
-        items = new ArrayList<String>();
-        adapter = new ArrayAdapter(this, android.R.layout.simple_list_item_multiple_choice, items);
-
-
-
-        scanTaskA.execute();
-
+      super.onPreExecute();
     }
 
+    @Override
+    protected void onCancelled() {
+      super.onCancelled();
+    }
 
-    private class ScanTask extends AsyncTask<Void, String, Void> {
+    @Override
+    protected void onPostExecute(Void aVoid) {
 
-        TextView tvCurrentScanning;
-        ListView tvScanResullt;
+      for (int i = 0; i < inetAddresses.size(); i++) {
+        items.add(canonicalHostNames.get(i));
+      }
 
+      adapter.notifyDataSetChanged();
+      asyncDialog.cancel();
 
-        ProgressDialog asyncDialog = new ProgressDialog(SearchDeviceActivity.this);
+      LayoutInflater inflater = (LayoutInflater) getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+      LinearLayout linearLayout = (LinearLayout) inflater.inflate(R.layout.iotcheck_activity, null);
+      setContentView(linearLayout);
 
-        @Override
-        protected void onPreExecute() {
+      tvResult = (ListView) findViewById(R.id.Result);
+      tvResult.setAdapter(adapter);
 
-                asyncDialog.setProgressStyle(ProgressDialog.STYLE_SPINNER);
-                asyncDialog.setMessage("디바이스 검색중..");
+      Button confButton = (Button) findViewById(R.id.confirm);
 
-                // show dialog
-                asyncDialog.show();
+      confButton.setOnClickListener(new Button.OnClickListener() {
+        public void onClick(View view) {
+          SparseBooleanArray checkedItems = tvResult.getCheckedItemPositions();
+          int counter = 0;
+          if (checkedItems != null) {
+            int length = checkedItems.size();
+            for (int i = 0; i < length; i++) {
+              if (checkedItems.get(checkedItems.keyAt(i))) {
+                counter++;
+              }
+            }
+          }
 
+          int count = counter;
+          asIP = new String[count];
 
-                super.onPreExecute();
+          for (int i = 0, j = 0; i < items.size(); i++) {
+            if (checkedItems.get(i) != false) {
+              asIP[j] = items.get(i);
+              j++;
+            }
+          }
 
-        }
+          for (int i = checkedItems.size() - 1; i >= 0; i--) {
+            Log.i("테스트", "선택한 ip :" + asIP[i]);
+            final AlertDialog.Builder builder = new AlertDialog.Builder(SearchDeviceActivity.this);
 
-        public ScanTask(TextView tvCurrentScanning, ListView tvScanResullt) {
-            this.tvCurrentScanning = tvCurrentScanning;
-            this.tvScanResullt = tvScanResullt;
-        }
+            String[] strarray0 = asIP[i].toString().split("\n");
+            String[] strarray = strarray0[0].split("\\.");
+            Pattern pattern1 = Pattern.compile("(" + "검사 진행중인 스마트폰" + ")");
+            Matcher match1 = pattern1.matcher(strarray0[1]);
+            if (!strarray[strarray.length - 1].equals("1") && !match1.find()) {
+              builder.setTitle(asIP[i]);
+              builder.setMessage("IOT 기기 비밀번호를 입력해 주세요!");
+              final EditText input = new EditText(SearchDeviceActivity.this);
+              LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
+                      LinearLayout.LayoutParams.MATCH_PARENT);
+              input.setTransformationMethod(PasswordTransformationMethod.getInstance());
+              input.setLayoutParams(lp);
+              builder.setView(input);
 
-        @Override
-        protected void onPostExecute(Void aVoid) {
+              sIp.add(asIP[i]);
+              if (i != checkedItems.size() - 1) {
 
-
-                for (int i = 0; i < inetAddresses.size(); i++) {
-                    items.add(canonicalHostNames.get(i));
-                }
-
-                adapter.notifyDataSetChanged();
-
-                asyncDialog.cancel();
-
-                LayoutInflater inflater = (LayoutInflater) getSystemService( Context.LAYOUT_INFLATER_SERVICE );
-                LinearLayout linearLayout = (LinearLayout) inflater.inflate( R.layout.iotcheck_activity, null);
-                setContentView(linearLayout);
-
-                tvResult = (ListView)findViewById(R.id.Result);
-                tvResult.setAdapter(adapter);
-
-                Button confButton = (Button)findViewById(R.id.confirm);
-
-                confButton.setOnClickListener(new Button.OnClickListener(){
-                    public void onClick(View view){
-                        SparseBooleanArray checkedItems = tvResult.getCheckedItemPositions();
-                        int counter = 0;
-                        if (checkedItems != null) {
-                            int length = checkedItems.size();
-                            for (int i = 0; i < length; i++) {
-                                if (checkedItems.get(checkedItems.keyAt(i))) {
-                                    counter++;
-                                }
-                            }
-                        }
-                        int count = counter;
-                        Log.i("DDDDDD222", Integer.toString(count));
-                        asIP = new String[count];
-
-                        for (int i = count-1, j = 0; i >= 0; i--) {
-                            if (checkedItems.get(i) != false){
-                                //test.setText(items.remove(i)) ;
-                                //String [] ip
-
-                                Log.i("DDDDDD222", Integer.toString(i));
-                                Log.i("DDDDD", items.get(i));
-                                asIP[j] = items.get(i);
-                                ++j;
-                            }
-                        }
-
-                        // 모든 선택 상태 초기화.
-                        tvResult.clearChoices() ;
-
-                        adapter.notifyDataSetChanged();
-
- /*                       scanTaskB = new ScanTask2(tvScanning, tvResult);
-                        scanTaskB.execute();*/
-
-
-                        intent.putExtra("ip",asIP);
-                        startActivity(intent);
-                    }
+                builder.setPositiveButton("다음", new DialogInterface.OnClickListener() {
+                  @Override
+                  public void onClick(DialogInterface dialog, int which) {
+                    String WifiPwdCheckResult;
+                    PwdCheck pwdCheck = new PwdCheck();
+                    WifiPwdCheckResult = pwdCheck.verify(input.getText().toString());
+                    WifiPwdCheckResult = WifiPwdCheckResult + "\r\n" + pwdCheck.Pwd10000(getApplicationContext(), input.getText().toString());
+                    logHistory.saveLog(sIp.get(pList++), WifiPwdCheckResult);
+                  }
                 });
 
-                Button cancButton = (Button)findViewById(R.id.cancel);
-
-                cancButton.setOnClickListener(new Button.OnClickListener(){
-                    public void onClick(View view){
-                        finish();
-                    }
+                builder.setNegativeButton("넘어가기", new DialogInterface.OnClickListener() {
+                  @Override
+                  public void onClick(DialogInterface dialog, int which) {
+                    logHistory.saveLog(sIp.get(pList++), "확인필요. 기기 비밀번호 체크 필요합니다.");
+                  }
                 });
 
-                super.onPostExecute(aVoid);
 
+              } else {
+                builder.setPositiveButton("검사시작", new DialogInterface.OnClickListener() {
+                  @Override
+                  public void onClick(DialogInterface dialog, int which) {
+                    String WifiPwdCheckResult;
+                    PwdCheck pwdCheck = new PwdCheck();
+                    WifiPwdCheckResult = pwdCheck.verify(input.getText().toString());
+                    WifiPwdCheckResult = WifiPwdCheckResult + "\r\n" + pwdCheck.Pwd10000(getApplicationContext(), input.getText().toString());
+                    logHistory.saveLog(sIp.get(pList++), WifiPwdCheckResult);
+
+                    intent.putExtra("ip", asIP);
+                    startActivity(intent);
+                    dialog.cancel();
+                  }
+                });
+
+                builder.setNegativeButton("넘어가기", new DialogInterface.OnClickListener() {
+                  @Override
+                  public void onClick(DialogInterface dialog, int which) {
+                    logHistory.saveLog(sIp.get(pList++), "확인필요. 기기 비밀번호 체크 필요합니다.");
+
+                    intent.putExtra("ip", asIP);
+                    startActivity(intent);
+                    dialog.cancel();
+                  }
+                });
+              }
+
+              builder.create();
+              builder.show();
+            }
+          }
+
+
+          // 모든 선택 상태 초기화.
+          tvResult.clearChoices();
+          adapter.notifyDataSetChanged();
         }
+      });
 
-        @Override
-        protected Void doInBackground(Void... voids) {
+      Button cancButton = (Button) findViewById(R.id.cancel);
 
-                Netinfo net = new Netinfo(getApplicationContext());
-                network_ip = Netinfo.getUnsignedLongFromIp(net.ip);
-                Log.e("IP=",Netinfo.getIpFromLongUnsigned(network_ip));
-                Log.e("cidr=",Netinfo.getIpFromLongUnsigned(net.cidr));
-
-
-                int shift = (32 - net.cidr);
-
-                if (net.cidr < 31) {
-                    network_start = (network_ip >> shift << shift) + 1;
-                    network_end = (network_start | ((1 << shift) - 1)) - 1;
-                } else {
-                    network_start = (network_ip >> shift << shift);
-                    network_end = (network_start | ((1 << shift) - 1));
-                }
-                size = (int) (network_end - network_start + 1);
-
-                if(inetAddresses == null){
-                    inetAddresses = new ArrayList<>();
-                }
-                inetAddresses.clear();
-
-                if(canonicalHostNames == null){
-                    canonicalHostNames = new ArrayList<>();
-                }
-                canonicalHostNames.clear();
-
-                //scanInetAddresses();
-                scan();
-                return null;
-
+      cancButton.setOnClickListener(new Button.OnClickListener() {
+        public void onClick(View view) {
+          finish();
         }
+      });
 
-
-
-        private void scanInetAddresses(){
-            //May be you have to adjust the timeout
-            final int timeout = 100;
-
-            if(inetAddresses == null){
-                inetAddresses = new ArrayList<>();
-            }
-            inetAddresses.clear();
-
-            if(canonicalHostNames == null){
-                canonicalHostNames = new ArrayList<>();
-            }
-            canonicalHostNames.clear();
-
-            //For demonstration, scan 192.168.1.xxx only
-            byte[] ip = {(byte) 172, (byte) 30, (byte) 1, 0};
-            for (int j = 1; j < 100; j++) {
-                ip[3] = (byte) j;
-                try {
-                    //asyncDialog.setProgress(j * 30);
-
-                    InetAddress checkAddress = InetAddress.getByAddress(ip);
-                    publishProgress(checkAddress.getCanonicalHostName());
-                    if (checkAddress.isReachable(timeout)) {
-                        inetAddresses.add(checkAddress);
-                        canonicalHostNames.add(checkAddress.getCanonicalHostName());
-                    }
-                } catch (UnknownHostException e) {
-                    e.printStackTrace();
-                    publishProgress(e.getMessage());
-                } catch (IOException e) {
-                    e.printStackTrace();
-                    publishProgress(e.getMessage());
-                }
-            }
-        }
-
-        private void scan(){
-
-            Log.v("start","start=" + Netinfo.getIpFromLongUnsigned(network_start) + " (" + network_start
-                    + "), end=" + Netinfo.getIpFromLongUnsigned(network_end) + " (" + network_end
-                    + "), length=" + size);
-            mPool = Executors.newFixedThreadPool(30);
-            if (network_ip <= network_end && network_ip >= network_start) {
-                Log.i("back and forth", "Back and forth scanning");
-                // gateway
-                launch(network_start);
-
-                // hosts
-                long pt_backward = network_ip;
-                long pt_forward = network_ip + 1;
-                long size_hosts = (size - 1)/2;
-                Log.i("info",Netinfo.getIpFromLongUnsigned(network_ip) + Netinfo.getIpFromLongUnsigned(size));
-                for (int i = 0; i < size_hosts; i++) {
-                    // Set pointer if of limits
-                    if (pt_backward <= network_start) {
-                        pt_move = 2;
-                    } else if (pt_forward > network_end) {
-                        pt_move = 1;
-                    }
-                    // Move back and forth
-                    if (pt_move == 1) {
-                        launch(pt_backward);
-                        pt_backward--;
-                        pt_move = 2;
-                    } else if (pt_move == 2) {
-                        launch(pt_forward);
-                        pt_forward++;
-                        pt_move = 1;
-                    }
-                }
-            } else {
-                Log.i("sequencial", "Sequencial scanning");
-                for (long i = network_start; i <= network_end; i++) {
-                    launch(i);
-                }
-            }
-
-            try {
-                Thread.sleep(10000);
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
-        }
-
+      super.onPostExecute(aVoid);
     }
 
-/*    private class ScanTask2 extends AsyncTask<Void, String, Void>{
+    @Override
+    protected Void doInBackground(Void... params) {
+      Log.i("테스트", "DefaultDiscovery의 doInBackground() 실행됨");
+      executor = Executors.newFixedThreadPool(THREADS);
 
-        TextView tvCurrentScanning;
-        ListView tvScanResullt;
-
-        ProgressDialog asyncDialog2 = new ProgressDialog(SearchDeviceActivity.this);
-
-        protected void onPreExecute() {
-
-            Log.i("AAAAA", "11111");
-            asyncDialog2.setProgressStyle(ProgressDialog.STYLE_SPINNER);
-            asyncDialog2.setMessage("IoT 검사중..");
-
-            // show dialog
-            asyncDialog2.show();
-            try {
-                sleep(3000);
-            }catch (Exception e) {
-
-            }
-
-            super.onPreExecute();
+      for (int i = start; i < end; i++) {
+        if (!executor.isShutdown()) {
+          executor.execute(new CheckRunnable(ip + Integer.toString(i)));
         }
+      }
 
-        public ScanTask2(TextView tvCurrentScanning, ListView tvScanResullt) {
-            this.tvCurrentScanning = tvCurrentScanning;
-            this.tvScanResullt = tvScanResullt;
+      executor.shutdown();
+      try {
+        if (!executor.awaitTermination(3600, TimeUnit.SECONDS)) {
+          executor.shutdownNow();
         }
+      } catch (InterruptedException e) {
+        Log.e("테스트", "강제종료 에러뜸 : " + e.getMessage());
+        executor.shutdownNow();
+        Thread.currentThread().interrupt();
+      }
 
-        protected void onPostExecute(Void aVoid){
-            try {
-                sleep(60000);
-                Log.i("CCCCCCC", sIP);
-                asyncDialog2.dismiss();
-                intent.putExtra("Dirname", LogHistory.sDName);
-                startActivity(intent);
-                super.onPostExecute(aVoid);
-                finish();
-            }catch (Exception e) {
-
-                Log.i("CCCCCCC", "ERROR");
-            }
-        }
-
-        protected Void doInBackground(Void... voids){
-            Log.i("EEEEEE", Integer.toString(asIP.length));
-
-
-            for(int i = 0; i < asIP.length; ++i) {
-                sIP = asIP[i];
-
-                if(asIP[i] != null)
-                {
-                    new CheckTask(asIP[i]).execute();
-                }
-
-*//*                switch(i) {
-                    case 0: CheckTask taskA = new CheckTask(asIP[i]); taskA.execute(); break;
-                    case 1: CheckTask taskB = new CheckTask(asIP[i]); taskB.execute(); break;
-                    case 2: CheckTask taskC = new CheckTask(asIP[i]); taskC.execute(); break;
-                    case 3: CheckTask taskD = new CheckTask(asIP[i]); taskD.execute(); break;
-                    case 4: CheckTask taskE = new CheckTask(asIP[i]); taskE.execute(); break;
-                    case 5: CheckTask taskF = new CheckTask(asIP[i]); taskF.execute(); break;
-                    case 6: CheckTask taskG = new CheckTask(asIP[i]); taskG.execute(); break;
-                    case 7: CheckTask taskH = new CheckTask(asIP[i]); taskH.execute(); break;
-                    case 8: CheckTask taskI = new CheckTask(asIP[i]); taskI.execute(); break;
-                    case 9: CheckTask taskJ = new CheckTask(asIP[i]); taskJ.execute(); break;
-                }*//*
-            }
-            return null;
-        }
-
-
-    }*/
-
-    private void launch(long i) {
-        if(!mPool.isShutdown()) {
-            mPool.execute(new CheckRunnable(Netinfo.getIpFromLongUnsigned(i)));
-        }
+      return null;
     }
 
+    //ip 검사 진행
     private class CheckRunnable implements Runnable {
+      private String addr;
 
-        private String addr;
-
-        CheckRunnable(String addr) {
-            this.addr = addr;
-        }
-
-        public void run() {
+      CheckRunnable(String addr) {
+        this.addr = addr;
+      }
 
 
+      public void run() {
 
-/*                if(isCancelled()) {
-                    publish(null);
-                }*/
-            Log.e("run", "run="+addr);
-            // Create host object
-            //host.responseTime = getRate();
-            try {
-                InetAddress h = InetAddress.getByName(addr);
-                // Rate control check
+        //주소는 addr로 저장됨
+        String[] ip_addr_arr = addr.split("\\.");
+        int a = Integer.parseInt(ip_addr_arr[0]);
+        int b = Integer.parseInt(ip_addr_arr[1]);
+        int c = Integer.parseInt(ip_addr_arr[2]);
+        int d = Integer.parseInt(ip_addr_arr[3]);
+        byte[] ip_addr_byte = {(byte) a, (byte) b, (byte) c, (byte) d};
 
-                // Arp Check #1
-                if(!Netinfo.NOMAC.equals(getHardwareAddress(addr))){
-                    Log.e(TAG, "found using arp #1 "+addr);
-                    inetAddresses.add(h);
-                    canonicalHostNames.add(h.getCanonicalHostName());
-                    return;
-                }
-                // Native InetAddress check
-                if (h.isReachable(500)) {
-                    Log.e(TAG, "found using InetAddress ping "+addr);
-                    //inetAddresses.add(h);
-                    inetAddresses.add(h);
-                    canonicalHostNames.add(h.getCanonicalHostName());
-                    // Set indicator and get a rate
-/*                        if (doRateControl && mRateControl.indicator == null) {
-                            mRateControl.indicator = addr;
-                            mRateControl.adaptRate();
-                        }*/
-                    return;
-                }
-                // Arp Check #2
-                if(!Netinfo.NOMAC.equals(getHardwareAddress(addr))){
-                    Log.e(TAG, "found using arp #2 "+addr);
-                    inetAddresses.add(h);
-                    canonicalHostNames.add(h.getCanonicalHostName());
-                    return;
-                }
-                // Custom check
-/*                    int port;
-                    // TODO: Get ports from options
-                    Socket s = new Socket();
-                    for (int i = 0; i < DPORTS.length; i++) {
-                        try {
-                            s.bind(null);
-                            s.connect(new InetSocketAddress(addr, DPORTS[i]), getRate());
-                            Log.v(TAG, "found using TCP connect "+addr+" on port=" + DPORTS[i]);
-                        } catch (IOException e) {
-                        } catch (IllegalArgumentException e) {
-                        } finally {
-                            try {
-                                s.close();
-                            } catch (Exception e){
-                            }
-                        }
-                    }*/
+        String mac_addr = getMacAddress(addr);
 
-                    /*
-                    if ((port = Reachable.isReachable(h, getRate())) > -1) {
-                        Log.v(TAG, "used Network.Reachable object, "+addr+" port=" + port);
-                        publish(host);
-                        return;
-                    }
-                    */
-                // Arp Check #3
-                if(!Netinfo.NOMAC.equals(getHardwareAddress(addr))){
-                    Log.e(TAG, "found using arp #3 "+addr);
-                    inetAddresses.add(h);
-                    canonicalHostNames.add(h.getCanonicalHostName());
-                    return;
-                }
-
-            } catch (IOException e) {
-
-                Log.e(TAG, e.getMessage());
-            }
-        }
-    }
-
-    public  String getHardwareAddress(String ip) {
-        String hw = Netinfo.NOMAC;
-        BufferedReader bufferedReader = null;
+        InetAddress checkAddress = null;
         try {
-            if (ip != null) {
-                String ptrn = String.format(MAC_RE, ip.replace(".", "\\."));
-                Pattern pattern = Pattern.compile(ptrn);
-                bufferedReader = new BufferedReader(new FileReader("/proc/net/arp"), BUF);
-                String line;
-                Matcher matcher;
-                while ((line = bufferedReader.readLine()) != null) {
-                    matcher = pattern.matcher(line);
-                    if (matcher.matches()) {
-                        hw = matcher.group(1);
-                        break;
-                    }
-                }
+          checkAddress = InetAddress.getByAddress(ip_addr_byte);
+        } catch (UnknownHostException e) {
+        }
+        //검사진행 부분 try, catch부분 - 네트워크 응답에 기다리는 시간때문에 apr 지속체크 해야함
+        if ("00:00:00:00:00:00".equals(mac_addr)) {
+          try {
+            if (checkAddress.isReachable(500)) {
+              inetAddresses.add(checkAddress);
+              mac_addr = getMacAddress(addr);
+
+              if (d == 1) {
+                canonicalHostNames.add(checkAddress.getCanonicalHostName() + "\n (공유기)");
+              } else if ("00:00:00:00:00:00".equals(mac_addr)) {
+                canonicalHostNames.add(checkAddress.getCanonicalHostName() + "\n (검사 진행중인 스마트폰)");
+              } else {
+                canonicalHostNames.add(checkAddress.getCanonicalHostName() + "\n (맥주소 : " + mac_addr + ")");
+              }
+
+
+              Log.i("테스트", addr + "의 발견된 mac address : " + mac_addr);
             } else {
-                Log.e(TAG, "ip is null");
-            }
-        } catch (IOException e) {
-            Log.e(TAG, "Can't open/read file ARP: " + e.getMessage());
-            return hw;
-        } finally {
-            try {
-                if(bufferedReader != null) {
-                    bufferedReader.close();
+              Thread.sleep(100);
+              mac_addr = getMacAddress(addr);
+              if (!"00:00:00:00:00:00".equals(mac_addr)) {
+                inetAddresses.add(checkAddress);
+                canonicalHostNames.add(checkAddress.getCanonicalHostName() + "\n (맥주소 : " + mac_addr + ")");
+                Log.i("테스트", addr + "의 발견된 mac address : " + mac_addr);
+              } else {
+                Thread.sleep(100);
+                mac_addr = getMacAddress(addr);
+                if (!"00:00:00:00:00:00".equals(mac_addr)) {
+                  inetAddresses.add(checkAddress);
+                  canonicalHostNames.add(checkAddress.getCanonicalHostName() + "\n (맥주소 : " + mac_addr + ")");
+                  Log.i("테스트", addr + "의 발견된 mac address : " + mac_addr);
                 }
-            } catch (IOException e) {
-                Log.e(TAG, e.getMessage());
+              }
             }
+
+          } catch (UnknownHostException e) {
+          } catch (IOException e) {
+          } catch (InterruptedException e) {
+          }
+
+        } else {
+          inetAddresses.add(checkAddress);
+          if (d == 1) {
+            canonicalHostNames.add(checkAddress.getCanonicalHostName() + "\n (공유기)");
+          } else {
+            canonicalHostNames.add(checkAddress.getCanonicalHostName() + "\n (맥주소 : " + mac_addr + ")");
+          }
+          Log.i("테스트", addr + "의 저장된 mac address : " + mac_addr);
         }
-        return hw;
+      }
     }
 
+    //저장되어 있는 mac 주소 가져옴
+    public String getMacAddress(String ip) {
+      String result_macaddr = "00:00:00:00:00:00";
+      int BUF = 8 * 1024;
 
-    private class CheckTask extends AsyncTask<Void, String, Void> {
-
-        String sIP;
-
-        CheckTask (String sIP) {
-            this.sIP = sIP;
+      BufferedReader bufferedReader = null;
+      try {
+        if (ip != null) {
+          String format = String.format("^%s\\s+0x1\\s+0x2\\s+([:0-9a-fA-F]+)\\s+\\*\\s+\\w+$", ip.replace(".", "\\."));
+          Pattern pattern = Pattern.compile(format);
+          bufferedReader = new BufferedReader(new FileReader("/proc/net/arp"), BUF);
+          String line;
+          Matcher matcher;
+          while ((line = bufferedReader.readLine()) != null) {
+            matcher = pattern.matcher(line);
+            if (matcher.matches()) {
+              result_macaddr = matcher.group(1);
+              break;
+            }
+          }
+        } else {
+          Log.e("테스트", "ip is null");
         }
-
-        @Override
-        protected void onPreExecute() {
-                super.onPreExecute();
+      } catch (IOException e) {
+        Log.e("테스트", "ARP 파일을 열 수 없음: " + e.getMessage());
+        return result_macaddr;
+      } finally {
+        try {
+          if (bufferedReader != null) {
+            bufferedReader.close();
+          }
+        } catch (IOException e) {
+          Log.e("테스트", "닫히지 않음" + e.getMessage());
         }
-
-
-
-        @Override
-        protected void onPostExecute(Void aVoid) {
-                super.onPostExecute(aVoid);
-        }
-
-        @Override
-        protected Void doInBackground(Void... voids) {
-
-
-            new IoTCheck(sIP);
-
-
-            return null;
-        }
-
+      }
+      return result_macaddr;
     }
+  }
+
 
 }

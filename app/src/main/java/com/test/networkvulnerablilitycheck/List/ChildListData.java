@@ -12,4 +12,8 @@ public class ChildListData {
         mChildText = string;
     }
 
+    public String getText() {
+      return mChildText;
+    }
+
 }
